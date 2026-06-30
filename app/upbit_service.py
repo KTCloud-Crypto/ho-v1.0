@@ -35,21 +35,52 @@ async def get_current_price(ticker: str) -> float:
     return float(result or 0)
 
 
+async def _get_orderbook(ticker: str) -> dict:
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, lambda: pyupbit.get_orderbook(ticker))
+    return result[0] if result else {}
+
+
 async def buy_market_order(ticker: str) -> dict:
+    import logging
+    logger = logging.getLogger(__name__)
     loop = asyncio.get_event_loop()
     upbit = get_upbit()
+
+    orderbook = await _get_orderbook(ticker)
+    ask_price = orderbook['orderbook_units'][0]['ask_price']
+
     krw = await get_balance_krw()
-    amount = krw * BUY_RATIO
-    result = await loop.run_in_executor(None, lambda: upbit.buy_market_order(ticker, amount))
+    volume = round(krw * BUY_RATIO / ask_price, 8)
+
+    logger.info(f"[BUY] ticker={ticker} krw={krw} ask_price={ask_price} volume={volume}")
+    try:
+        result = await loop.run_in_executor(None, lambda: upbit.buy_limit_order(ticker, ask_price, volume))
+    except Exception as e:
+        logger.error(f"[BUY] exception={e}")
+        return None
+    logger.info(f"[BUY] result={result}")
     return result
 
 
 async def sell_market_order(ticker: str) -> dict:
+    import logging
+    logger = logging.getLogger(__name__)
     loop = asyncio.get_event_loop()
     upbit = get_upbit()
-    coin = ticker.replace("KRW-", "")
+
+    orderbook = await _get_orderbook(ticker)
+    bid_price = orderbook['orderbook_units'][0]['bid_price']
+
     qty = await get_balance_coin(ticker)
-    result = await loop.run_in_executor(None, lambda: upbit.sell_market_order(ticker, qty))
+
+    logger.info(f"[SELL] ticker={ticker} bid_price={bid_price} qty={qty}")
+    try:
+        result = await loop.run_in_executor(None, lambda: upbit.sell_limit_order(ticker, bid_price, qty))
+    except Exception as e:
+        logger.error(f"[SELL] exception={e}")
+        return None
+    logger.info(f"[SELL] result={result}")
     return result
 
 

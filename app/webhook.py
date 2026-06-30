@@ -19,9 +19,25 @@ async def _notify(text: str):
 
 @router.post("/webhook")
 async def webhook(request: Request):
-    body = await request.json()
+    import json as _json
+    raw = await request.body()
+    logger.info(f"[RAW] headers={dict(request.headers)} body={raw.decode('utf-8', errors='replace')}")
+
+    try:
+        body = _json.loads(raw) if raw else {}
+    except Exception:
+        body = {}
     action = body.get("action", "").lower()   # "buy" | "sell"
-    ticker = body.get("ticker", "").upper()    # "KRW-BTC"
+
+    raw_ticker = body.get("ticker") or body.get("symbol") or ""
+    raw_ticker = raw_ticker.upper()
+    for suffix in ("USDT", "USD", "BUSD", "PERP", "KRW"):
+        if raw_ticker.endswith(suffix):
+            raw_ticker = raw_ticker[:-len(suffix)]
+            break
+    ticker = f"KRW-{raw_ticker}" if raw_ticker and not raw_ticker.startswith("KRW-") else raw_ticker
+
+    logger.info(f"[PARSED] action={action} ticker={ticker}")
 
     if not action or not ticker:
         return {"status": "ignored", "reason": "action/ticker 누락"}
@@ -37,7 +53,7 @@ async def webhook(request: Request):
         if result:
             state.positions[ticker] = "long"
             price = await upbit.get_current_price(ticker)
-            await _notify(f"✅ 매수 완료\n{ticker}\n현재가: {price:,.0f}원")
+            await _notify(f"✅ 매수 완료\n{ticker}\n현재가: {price:,.2f}원")
             logger.info(f"매수 완료: {ticker} {result}")
         else:
             await _notify(f"❌ 매수 실패: {ticker}")
@@ -51,7 +67,7 @@ async def webhook(request: Request):
         if result:
             state.positions[ticker] = None
             price = await upbit.get_current_price(ticker)
-            await _notify(f"✅ 매도 완료\n{ticker}\n현재가: {price:,.0f}원")
+            await _notify(f"✅ 매도 완료\n{ticker}\n현재가: {price:,.2f}원")
             logger.info(f"매도 완료: {ticker} {result}")
         else:
             await _notify(f"❌ 매도 실패: {ticker}")
