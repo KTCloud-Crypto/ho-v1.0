@@ -1,0 +1,6 @@
+fastapi==0.136.0
+uvicorn==0.45.0
+pyupbit==0.2.34
+python-telegram-bot==22.7
+pydantic-settings==2.14.0
+python-dotenv==1.0.0
