@@ -2,38 +2,64 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from app.config import settings
-from app.state import state
+from app.db import SessionLocal
+from app.models import User
+from app.crypto import decrypt
 from app import upbit_service as upbit
 
 logger = logging.getLogger(__name__)
 
 
-def _is_me(update: Update) -> bool:
-    return str(update.effective_chat.id) == settings.telegram_chat_id
+def _get_user(update: Update) -> User | None:
+    chat_id = str(update.effective_chat.id)
+    db = SessionLocal()
+    try:
+        return db.query(User).filter(User.telegram_chat_id == chat_id).first()
+    finally:
+        db.close()
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _is_me(update):
-        return
-    state.enabled = True
+    chat_id = str(update.effective_chat.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user is None:
+            return
+        user.bot_enabled = True
+        db.commit()
+    finally:
+        db.close()
     await update.message.reply_text("✅ 봇 활성화됨\n트레이딩뷰 신호 수신 시 매매를 실행합니다.")
 
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _is_me(update):
-        return
-    state.enabled = False
+    chat_id = str(update.effective_chat.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user is None:
+            return
+        user.bot_enabled = False
+        db.commit()
+    finally:
+        db.close()
     await update.message.reply_text("⛔ 봇 비활성화됨\n신호가 와도 매매하지 않습니다.")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _is_me(update):
-        return
-    status = "✅ 활성화" if state.enabled else "⛔ 비활성화"
-    positions = state.positions
+    chat_id = str(update.effective_chat.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user is None:
+            return
+        status = "✅ 활성화" if user.bot_enabled else "⛔ 비활성화"
+        active = [p.ticker for p in user.positions if p.status == "long"]
+    finally:
+        db.close()
 
     lines = [f"상태: {status}", ""]
-    active = {k: v for k, v in positions.items() if v == "long"}
     if active:
         lines.append("📌 보유 포지션:")
         for ticker in active:
@@ -46,9 +72,21 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _is_me(update):
-        return
-    balances = await upbit.get_all_balances()
+    chat_id = str(update.effective_chat.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_chat_id == chat_id).first()
+        if user is None:
+            return
+        if not user.exchange_key:
+            await update.message.reply_text("거래소 API Key가 등록되어 있지 않습니다")
+            return
+        access_key = decrypt(user.exchange_key.encrypted_access_key)
+        secret_key = decrypt(user.exchange_key.encrypted_secret_key)
+    finally:
+        db.close()
+
+    balances = await upbit.get_all_balances(access_key, secret_key)
     if not balances:
         await update.message.reply_text("잔고 조회 실패")
         return
@@ -76,7 +114,8 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _is_me(update):
+    user = _get_user(update)
+    if user is None:
         return
     text = (
         "/start — 봇 활성화 (매매 시작)\n"
